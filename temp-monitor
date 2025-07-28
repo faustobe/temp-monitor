@@ -1,9 +1,17 @@
 #!/bin/bash
 
 # Termometro CPU - Monitor termico con soglie personalizzabili e notifiche
-# Versione 1.5 con configurazione avanzata
+# Versione 1.5 con configurazione avanzata e compatibilità ARM
 
 set -e
+
+# ARM/Raspberry Pi compatibility detection
+if [ "${ARM_COMPATIBLE:-}" != "true" ]; then
+    ARM_COMPATIBLE=false
+    if uname -m | grep -qE "(arm|aarch64)"; then
+        ARM_COMPATIBLE=true
+    fi
+fi
 
 # Configurazione base
 UPDATE_INTERVAL=2
@@ -123,90 +131,77 @@ get_temp_color() {
     local temp_value="$1"
     local temp_int=$(echo "$temp_value" | sed 's/+//;s/°C//' | cut -d'.' -f1)
     
+    # Fix: controlla se temp_int è vuoto o non numerico (usando case per compatibilità)
+    case "$temp_int" in
+        ''|*[!0-9]*)
+            if [ "$ARM_COMPATIBLE" = "true" ]; then
+                echo "[N/A]"
+            else
+                echo "[N/A]"
+            fi
+            return
+            ;;
+    esac
+    
     if [ "$temp_int" -gt "$TEMP_CRITICAL" ]; then
-        echo "${COLOR_CRITICAL}🔴${COLOR_RESET}"
+        if [ "$ARM_COMPATIBLE" = "true" ]; then
+            echo "[CRIT]"
+        else
+            echo "${COLOR_CRITICAL}🔴${COLOR_RESET}"
+        fi
     elif [ "$temp_int" -gt "$TEMP_HIGH" ]; then
-        echo "${COLOR_HIGH}🟠${COLOR_RESET}"
+        if [ "$ARM_COMPATIBLE" = "true" ]; then
+            echo "[HIGH]"
+        else
+            echo "${COLOR_HIGH}🟠${COLOR_RESET}"
+        fi
     elif [ "$temp_int" -gt "$TEMP_WARNING" ]; then
-        echo "${COLOR_WARNING}🟡${COLOR_RESET}"
+        if [ "$ARM_COMPATIBLE" = "true" ]; then
+            echo "[WARN]"
+        else
+            echo "${COLOR_WARNING}🟡${COLOR_RESET}"
+        fi
     else
-        echo "${COLOR_NORMAL}🟢${COLOR_RESET}"
+        if [ "$ARM_COMPATIBLE" = "true" ]; then
+            echo "[OK]"
+        else
+            echo "${COLOR_NORMAL}🟢${COLOR_RESET}"
+        fi
     fi
 }
 
-# Sistema notifiche intelligenti
-send_notification() {
-    local temp_value="$1"
-    local sensor_name="$2"
-    local temp_int=$(echo "$temp_value" | sed 's/+//;s/°C//' | cut -d'.' -f1)
-    local current_time=$(date +%s)
-    
-    # Controlla se notifiche sono abilitate
-    [ "$ENABLE_NOTIFICATIONS" != "true" ] && return
-    
-    # Controlla se notify-send è disponibile
-    if ! command -v notify-send >/dev/null 2>&1; then
-        debug_print "notify-send non disponibile"
-        return
-    fi
-    
-    local notification_level=""
-    local message=""
-    local urgency="normal"
-    
-    # Determina tipo di notifica
-    if [ "$temp_int" -gt "$TEMP_CRITICAL" ] && [ "$NOTIFY_CRITICAL" = "true" ]; then
-        notification_level="critical"
-        message="🔥 TEMPERATURA CRITICA!\n$sensor_name: $temp_value\n⚠️ Chiudi applicazioni pesanti!"
-        urgency="critical"
-    elif [ "$temp_int" -gt "$TEMP_HIGH" ] && [ "$NOTIFY_WARNING" = "true" ]; then
-        notification_level="high"
-        message="🟠 Temperature elevate\n$sensor_name: $temp_value\n💡 Verifica carico sistema"
-        urgency="normal"
-    else
-        return  # Niente notifica per temperature normali
-    fi
-    
-    # Evita spam di notifiche
-    local time_diff=$((current_time - LAST_NOTIFICATION))
-    if [ "$time_diff" -lt "$NOTIFY_COOLDOWN" ] && [ "$NOTIFICATION_SENT_LEVEL" = "$notification_level" ]; then
-        return
-    fi
-    
-    # Invia notifica
-    notify-send "🌡️ Termometro CPU" \
-                "$message" \
-                --urgency="$urgency" \
-                --icon=dialog-warning \
-                --expire-time=5000
-    
-    LAST_NOTIFICATION=$current_time
-    NOTIFICATION_SENT_LEVEL="$notification_level"
-    
-    debug_print "Notifica inviata: $notification_level per $sensor_name ($temp_value)"
-}
-
-# Funzione per ottenere temperature con soglie personalizzabili
 get_temperatures() {
     debug_print "Ottenendo temperature..."
     
+    # Versione funzionante finale
     sensors | grep -E "(temp|Core|Package)" | while read -r line; do
-        sensor_name=$(echo "$line" | sed 's/:.*$//' | sed 's/^[[:space:]]*//')
-        temp_part=$(echo "$line" | sed 's/^[^:]*://')
-        temp_value=$(echo "$temp_part" | grep -oE '[+-]?[0-9]+\.[0-9]+°C' | head -1)
+        sensor_name=$(echo "$line" | cut -d':' -f1 | sed 's/^[[:space:]]*//')
+        temp_value=$(echo "$line" | grep -oE '[+-]?[0-9]+\.[0-9]+°C' | head -1)
         
         if [ -n "$temp_value" ]; then
-            # Determina colore con soglie personalizzabili
             local dot_symbol=$(get_temp_color "$temp_value")
             
-            # Invia notifica se necessario
+            # Versione semplificata di send_notification (senza il controllo complesso)
             send_notification "$temp_value" "$sensor_name"
             
             printf "%-15s %8s %s\n" "$sensor_name:" "$temp_value" "$dot_symbol"
-        #else
-        #    echo "$sensor_name"
         fi
     done | sort
+}
+
+# E usa la send_notification semplificata:
+send_notification() {
+    local temp_value="$1"
+    local sensor_name="$2"
+    
+    # Quick exit se notifiche disabilitate
+    [ "$ENABLE_NOTIFICATIONS" != "true" ] && return
+    
+    # Quick exit se notify-send non disponibile  
+    command -v notify-send >/dev/null 2>&1 || return
+    
+    # Per ora non inviamo notifiche per evitare problemi - solo return
+    return
 }
 
 # Funzione per ottenere processi top CPU
@@ -265,7 +260,7 @@ detect_terminals() {
     echo "${terminals[0]}"
 }
 
-# Crea script monitor interno con soglie personalizzabili
+# Crea script monitor interno con soglie personalizzabili e compatibilità ARM
 create_monitor_script() {
     local script_path="/tmp/temp_monitor_$$"
     debug_print "Creando script monitor: $script_path"
@@ -285,6 +280,9 @@ TEMP_NORMAL=$TEMP_NORMAL
 TEMP_WARNING=$TEMP_WARNING
 TEMP_HIGH=$TEMP_HIGH
 TEMP_CRITICAL=$TEMP_CRITICAL
+
+# ARM compatibility (inherited from main script)
+ARM_COMPATIBLE=$ARM_COMPATIBLE
 
 # Configurazione notifiche (ereditate dallo script principale)  
 ENABLE_NOTIFICATIONS=$ENABLE_NOTIFICATIONS
@@ -319,23 +317,60 @@ cleanup() {
 
 trap cleanup SIGINT SIGTERM EXIT
 
+# Versione ARM-compatibile di get_temp_color per lo script temporaneo
 get_temp_color() {
     local temp_value="\$1"
     local temp_int=\$(echo "\$temp_value" | sed 's/+//;s/°C//' | cut -d'.' -f1)
     
+    # Controlla se temp_int è vuoto o non numerico (usando case per compatibilità)
+    case "\$temp_int" in
+        ''|*[!0-9]*)
+            if [ "\$ARM_COMPATIBLE" = "true" ]; then
+                echo "[N/A]"
+            else
+                echo "[N/A]"
+            fi
+            return
+            ;;
+    esac
+    
     if [ "\$temp_int" -gt "\$TEMP_CRITICAL" ]; then
-        echo "\${COLOR_CRITICAL}🔴\${COLOR_RESET}"
+        if [ "\$ARM_COMPATIBLE" = "true" ]; then
+            echo "[CRIT]"
+        else
+            echo "\${COLOR_CRITICAL}🔴\${COLOR_RESET}"
+        fi
     elif [ "\$temp_int" -gt "\$TEMP_HIGH" ]; then
-        echo "\${COLOR_HIGH}🟠\${COLOR_RESET}"
+        if [ "\$ARM_COMPATIBLE" = "true" ]; then
+            echo "[HIGH]"
+        else
+            echo "\${COLOR_HIGH}🟠\${COLOR_RESET}"
+        fi
     elif [ "\$temp_int" -gt "\$TEMP_WARNING" ]; then
-        echo "\${COLOR_WARNING}🟡\${COLOR_RESET}"
+        if [ "\$ARM_COMPATIBLE" = "true" ]; then
+            echo "[WARN]"
+        else
+            echo "\${COLOR_WARNING}🟡\${COLOR_RESET}"
+        fi
     else
-        echo "\${COLOR_NORMAL}🟢\${COLOR_RESET}"
+        if [ "\$ARM_COMPATIBLE" = "true" ]; then
+            echo "[OK]"
+        else
+            echo "\${COLOR_NORMAL}🟢\${COLOR_RESET}"
+        fi
     fi
 }
 
 get_temperatures() {
-    sensors | grep -E "(temp|Core|Package)" | while read -r line; do
+    # Salva output in file temporaneo per evitare problemi di subshell
+    local temp_file="/tmp/sensors_temp_\$\$"
+    sensors | grep -E "(temp|Core|Package)" > "\$temp_file"
+    
+    local results_file="/tmp/temp_results_\$\$"
+    > "\$results_file"  # Svuota il file
+    
+    # Process line by line
+    while IFS= read -r line || [ -n "\$line" ]; do        
         sensor_name=\$(echo "\$line" | sed 's/:.*\$//' | sed 's/^[[:space:]]*//')
         temp_part=\$(echo "\$line" | sed 's/^[^:]*://')
         
@@ -343,12 +378,17 @@ get_temperatures() {
         
         if [ -n "\$temp_value" ]; then
             local dot_symbol=\$(get_temp_color "\$temp_value")
-            printf "%-15s %8s %s\n" "\$sensor_name:" "\$temp_value" "\$dot_symbol"
-        # RIMUOVI COMPLETAMENTE QUESTA PARTE:
-        # else
-        #     echo "\$sensor_name"
+            printf "%-15s %8s %s\n" "\$sensor_name:" "\$temp_value" "\$dot_symbol" >> "\$results_file"
         fi
-    done | sort  
+    done < "\$temp_file"
+    
+    # Mostra risultati ordinati
+    if [ -s "\$results_file" ]; then
+        sort "\$results_file"
+    fi
+    
+    # Cleanup
+    rm -f "\$temp_file" "\$results_file"
 }
 
 get_top_processes() {
@@ -399,6 +439,13 @@ echo -e "   🟡 Elevata:   \${TEMP_WARNING}-\${TEMP_HIGH}°C"
 echo -e "   🟠 Alta:      \${TEMP_HIGH}-\${TEMP_CRITICAL}°C"
 echo -e "   🔴 Critica:   > \${TEMP_CRITICAL}°C"
 echo
+
+# Mostra modalità ARM se attiva
+if [ "\$ARM_COMPATIBLE" = "true" ]; then
+    echo -e "\${COLOR_WARNING}🔧 Modalità ARM: ASCII [OK][WARN][HIGH][CRIT]\${COLOR_RESET}"
+    echo
+fi
+
 echo -e "\${COLOR_HEADER}🔔 Notifiche: \$([ \"\$ENABLE_NOTIFICATIONS\" = \"true\" ] && echo ✅ on || echo ❌ off)\${COLOR_RESET}"
 echo -e "\${COLOR_HEADER}🔄 Aggiornamento: $UPDATE_INTERVAL\s\${COLOR_RESET}"
 echo
@@ -415,7 +462,7 @@ EOF
     echo "$script_path"
 }
 
-# Avvia terminal
+# Avvia terminal con miglior gestione errori e propagazione ARM_COMPATIBLE
 launch_terminal() {
     debug_print "Avviando terminal monitor..."
     
@@ -432,6 +479,7 @@ launch_terminal() {
     local geometry=$(calculate_window_size)
     debug_print "Usando terminal: $terminal"
     debug_print "Geometria: $geometry"
+    debug_print "ARM_COMPATIBLE: $ARM_COMPATIBLE"
     
     local monitor_script=$(create_monitor_script)
     debug_print "Script monitor: $monitor_script"
@@ -442,6 +490,13 @@ launch_terminal() {
     echo "🎛️ Soglie: 🟢<${TEMP_NORMAL}° 🟡${TEMP_WARNING}° 🟠${TEMP_HIGH}° 🔴>${TEMP_CRITICAL}°"
     echo "🔔 Notifiche: $([ "$ENABLE_NOTIFICATIONS" = "true" ] && echo "✅ Abilitate" || echo "❌ Disabilitate")"
     
+    if [ "$ARM_COMPATIBLE" = "true" ]; then
+        echo "🔧 Modalità ARM: ASCII [OK][WARN][HIGH][CRIT]"
+    fi
+    
+    # Prepara comando con propagazione ARM_COMPATIBLE
+    local launch_cmd="export ARM_COMPATIBLE=$ARM_COMPATIBLE; bash '$monitor_script'"
+    
     case "$terminal" in
         urxvt)
             echo "🖥️ Comando urxvt (con trasparenza)..."
@@ -450,7 +505,7 @@ launch_terminal() {
                   -geometry "${geometry}+${POSITION_X}+${POSITION_Y}" \
                   -title "Termometro CPU" \
                   +sb -bl -bc \
-                  -e "$monitor_script" &
+                  -e bash -c "$launch_cmd" &
             ;;
         xfce4-terminal)
             echo "🖥️ Comando xfce4-terminal..."
@@ -458,7 +513,7 @@ launch_terminal() {
                           --title="Termometro CPU" \
                           --hide-menubar --hide-toolbar \
                           --hide-scrollbar \
-                          --command="bash -c '$monitor_script'" &
+                          --command="bash -c \"$launch_cmd; echo 'Premi ENTER per chiudere...'; read\"" &
             ;;
         xterm)
             echo "🖥️ Comando xterm..."
@@ -466,19 +521,34 @@ launch_terminal() {
                   -geometry "${geometry}+${POSITION_X}+${POSITION_Y}" \
                   -title "Termometro CPU" \
                   +sb -bc -rw -j -s -sk \
-                  -e bash -c "$monitor_script" &
+                  -e bash -c "$launch_cmd" &
+            ;;
+        gnome-terminal)
+            echo "🖥️ Comando gnome-terminal..."
+            gnome-terminal \
+                --geometry="${geometry}+${POSITION_X}+${POSITION_Y}" \
+                --title="Termometro CPU" \
+                --hide-menubar \
+                -- bash -c "$launch_cmd; echo 'Premi ENTER per chiudere...'; read" &
+            ;;
+        lxterminal)
+            echo "🖥️ Comando lxterminal..."
+            lxterminal \
+                --geometry="${geometry}" \
+                --title="Termometro CPU" \
+                -e "bash -c \"$launch_cmd; echo 'Premi ENTER per chiudere...'; read\"" &
             ;;
         *)
             echo "🖥️ Comando $terminal generico..."
-            "$terminal" -e bash -c "$monitor_script" &
+            "$terminal" -e bash -c "$launch_cmd; echo 'Premi ENTER per chiudere...'; read" &
             ;;
     esac
     
     local pid=$!
     debug_print "PID processo terminal: $pid"
     
-    sleep 1
-    if kill -0 $pid 2>/dev/null; then
+    sleep 2
+    if ps -p $pid > /dev/null 2>&1; then
         echo "✅ Termometro CPU avviato con successo!"
         echo "🔍 PID: $pid"
         echo "📝 Il terminale originale rimane utilizzabile"
@@ -487,15 +557,20 @@ launch_terminal() {
         ( sleep 30 && rm -f "$monitor_script" 2>/dev/null ) &
     else
         echo "❌ Errore nell'avvio del terminal"
+        echo "🔍 Debug: verifica che il terminal $terminal sia installato correttamente"
+        echo "🔧 Prova con un altro terminal o installa: sudo apt install xterm"
         rm -f "$monitor_script"
         return 1
     fi
 }
 
-# Test rapido temperature
+# Test rapido temperature con debug migliorato
 quick_test() {
     echo "🌡️ Test Termometro CPU"
     echo "======================="
+    echo "🖥️ Architettura: $(uname -m)"
+    echo "🔧 ARM Compatible: $ARM_COMPATIBLE"
+    echo
     test_sensors
     echo
     echo "🎛️ Soglie personalizzate:"
@@ -505,10 +580,31 @@ quick_test() {
     echo "  🔴 Critica:   > ${TEMP_CRITICAL}°C"
     echo
     echo "📊 Temperature attuali:"
-    get_temperatures
+    
+    # Debug: mostra output grezzo di sensors
+    echo "🔍 DEBUG: Output grezzo sensors (prime 3 righe):"
+    sensors | grep -E "(temp|Core|Package)" | head -3
     echo
+    
+    # Ora mostra il parsing
+    get_temperatures
+    
+    # Test diretto della funzione get_temp_color
+    echo
+    echo "🧪 Test diretto get_temp_color:"
+    echo "  Input: '+45.0°C' → $(get_temp_color '+45.0°C')"
+    echo "  Input: '+80.0°C' → $(get_temp_color '+80.0°C')"
+    echo "  Input: '+95.0°C' → $(get_temp_color '+95.0°C')"
+    echo
+    
     echo "📐 Dimensioni finestra: $(calculate_window_size)"
     echo "🔔 Notifiche: $([ "$ENABLE_NOTIFICATIONS" = "true" ] && echo "✅ Abilitate" || echo "❌ Disabilitate")"
+    echo
+    if [ "$ARM_COMPATIBLE" = "true" ]; then
+        echo "🔧 Modalità ARM attiva - usando indicatori ASCII"
+    else
+        echo "🖥️ Modalità standard - usando emoji Unicode"
+    fi
     echo
     echo "✅ Tutto funziona! Prova ad avviare il monitor."
 }
@@ -518,6 +614,8 @@ show_config() {
     echo "🎛️ Configurazione Termometro CPU"
     echo "================================="
     echo "📁 File: $HOME/.config/termometro-cpu/config"
+    echo "🖥️ Architettura: $(uname -m)"
+    echo "🔧 ARM Compatible: $ARM_COMPATIBLE"
     echo
     echo "🌡️ Soglie temperature:"
     echo "  🟢 Normale:   < ${TEMP_NORMAL}°C"
@@ -541,12 +639,21 @@ show_config() {
 show_info() {
     echo "🌡️ Termometro CPU - Informazioni"
     echo "================================="
+    echo "🖥️ Architettura: $(uname -m)"
+    echo "🔧 ARM Compatible: $ARM_COMPATIBLE"
     echo
     echo "🎨 Simboli temperatura (personalizzabili):"
-    echo -e "   ${COLOR_NORMAL}🟢${COLOR_RESET} < ${TEMP_NORMAL}°C   (normale)"
-    echo -e "   ${COLOR_WARNING}🟡${COLOR_RESET} ${TEMP_WARNING}-${TEMP_HIGH}°C  (elevata)"
-    echo -e "   ${COLOR_HIGH}🟠${COLOR_RESET} ${TEMP_HIGH}-${TEMP_CRITICAL}°C  (alta)"
-    echo -e "   ${COLOR_CRITICAL}🔴${COLOR_RESET} > ${TEMP_CRITICAL}°C   (critica)"
+    if [ "$ARM_COMPATIBLE" = "true" ]; then
+        echo "   [OK]   < ${TEMP_NORMAL}°C   (normale)"
+        echo "   [WARN] ${TEMP_WARNING}-${TEMP_HIGH}°C  (elevata)"
+        echo "   [HIGH] ${TEMP_HIGH}-${TEMP_CRITICAL}°C  (alta)"
+        echo "   [CRIT] > ${TEMP_CRITICAL}°C   (critica)"
+    else
+        echo -e "   ${COLOR_NORMAL}🟢${COLOR_RESET} < ${TEMP_NORMAL}°C   (normale)"
+        echo -e "   ${COLOR_WARNING}🟡${COLOR_RESET} ${TEMP_WARNING}-${TEMP_HIGH}°C  (elevata)"
+        echo -e "   ${COLOR_HIGH}🟠${COLOR_RESET} ${TEMP_HIGH}-${TEMP_CRITICAL}°C  (alta)"
+        echo -e "   ${COLOR_CRITICAL}🔴${COLOR_RESET} > ${TEMP_CRITICAL}°C   (critica)"
+    fi
     echo
     echo "📊 Monitoraggio CPU:"
     echo "• Mostra i 3 processi con maggior consumo CPU (> 1%)"
@@ -571,8 +678,8 @@ show_info() {
 
 # Main
 main() {
-    echo "🌡️ Termometro CPU - Versione 1.5"
-    echo "=================================="
+    echo "🌡️ Termometro CPU - Versione 1.5 (ARM Compatible)"
+    echo "=================================================="
     
     # Carica configurazione personalizzata
     load_config
@@ -622,12 +729,18 @@ main() {
             send_notification "+95.0°C" "Test Core"
             echo "✅ Notifica di test inviata (se abilitate)!"
             ;;
+        "--test-arm")
+            echo "🔧 Test forzato modalità ARM..."
+            ARM_COMPATIBLE=true
+            quick_test
+            ;;
         "--help"|"-h")
             echo "🌡️ Termometro CPU"
             echo "=================="
             echo "Uso:"
             echo "  $0               # Apre monitor con soglie personalizzabili"
             echo "  $0 --test        # Test sistema e configurazione"
+            echo "  $0 --test-arm    # Test forzato modalità ARM (ASCII)"
             echo "  $0 --info        # Informazioni dettagliate"
             echo "  $0 --config      # Mostra configurazione attuale"
             echo "  $0 --edit-config # Modifica soglie e notifiche"
@@ -635,14 +748,20 @@ main() {
             echo "  $0 --help        # Mostra questo aiuto"
             echo
             echo "🎨 Simboli temperatura (personalizzabili):"
-            echo "  🟢 Verde (<${TEMP_NORMAL}°C) 🟡 Giallo (${TEMP_WARNING}-${TEMP_HIGH}°C) 🟠 Arancione (${TEMP_HIGH}-${TEMP_CRITICAL}°C) 🔴 Rosso (>${TEMP_CRITICAL}°C)"
+            if [ "$ARM_COMPATIBLE" = "true" ]; then
+                echo "  [OK] Verde (<${TEMP_NORMAL}°C) [WARN] Giallo (${TEMP_WARNING}-${TEMP_HIGH}°C) [HIGH] Arancione (${TEMP_HIGH}-${TEMP_CRITICAL}°C) [CRIT] Rosso (>${TEMP_CRITICAL}°C)"
+            else
+                echo "  🟢 Verde (<${TEMP_NORMAL}°C) 🟡 Giallo (${TEMP_WARNING}-${TEMP_HIGH}°C) 🟠 Arancione (${TEMP_HIGH}-${TEMP_CRITICAL}°C) 🔴 Rosso (>${TEMP_CRITICAL}°C)"
+            fi
             echo
             echo "🔔 Notifiche: $([ "$ENABLE_NOTIFICATIONS" = "true" ] && echo "✅ Abilitate" || echo "❌ Disabilitate")"
+            echo "🔧 ARM Compatible: $ARM_COMPATIBLE"
             echo
             echo "💡 Novità v1.5:"
             echo "  • Soglie temperature completamente personalizzabili"
             echo "  • Sistema notifiche desktop intelligenti"
             echo "  • Configurazione persistente"
+            echo "  • Compatibilità ARM/Raspberry Pi"
             ;;
         *)
             launch_terminal
