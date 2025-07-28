@@ -1,0 +1,63 @@
+name: 🐛 Bug Report
+description: Report a bug or issue with Temperature Monitor
+title: "[BUG] "
+labels: ["bug", "needs-triage"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! 🐛
+        Please fill out this form as completely as possible.
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Pre-submission checklist
+      options:
+        - label: I have searched existing issues and this is not a duplicate
+          required: true
+        - label: I have tried restarting the temperature monitor
+          required: false
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe what went wrong
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: How can we reproduce this issue?
+      placeholder: |
+        1. Run `temp-monitor`
+        2. Click on...
+        3. See error
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      options:
+        - Ubuntu
+        - Debian
+        - Fedora
+        - Arch Linux
+        - Other Linux distribution
+    validations:
+      required: true
+
+  - type: textarea
+    id: sensors-output
+    attributes:
+      label: Sensors output
+      description: Please paste the output of the `sensors` command
+      render: shell
+    validations:
+      required: false

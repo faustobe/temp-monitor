@@ -1,0 +1,373 @@
+#!/bin/bash
+# temp-monitor-desktop-integration
+# Universal desktop environment integration script
+
+set -e
+
+# Colors
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+print_status() { echo -e "${BLUE}[INFO]${NC} $1"; }
+print_success() { echo -e "${GREEN}[OK]${NC} $1"; }
+print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
+print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
+# Detect desktop environment
+detect_desktop_environment() {
+    local de="unknown"
+    
+    if [ -n "$XDG_CURRENT_DESKTOP" ]; then
+        de=$(echo "$XDG_CURRENT_DESKTOP" | tr '[:upper:]' '[:lower:]')
+    elif [ -n "$DESKTOP_SESSION" ]; then
+        de=$(echo "$DESKTOP_SESSION" | tr '[:upper:]' '[:lower:]')
+    elif [ -n "$GNOME_DESKTOP_SESSION_ID" ]; then
+        de="gnome"
+    elif [ -n "$KDE_SESSION_VERSION" ]; then
+        de="kde"
+    elif command -v xfce4-session >/dev/null 2>&1; then
+        de="xfce"
+    fi
+    
+    # Handle composite desktop names
+    case "$de" in
+        *gnome*) de="gnome" ;;
+        *kde*|*plasma*) de="kde" ;;
+        *xfce*) de="xfce" ;;
+        *mate*) de="mate" ;;
+        *cinnamon*) de="cinnamon" ;;
+        *lxde*|*lxqt*) de="lxde" ;;
+        *i3*|*sway*) de="wm" ;;
+    esac
+    
+    echo "$de"
+}
+
+# Find temperature monitor command
+find_temp_monitor() {
+    local temp_cmd=""
+    
+    for cmd in "temp-monitor" "temp_monitor" "temp"; do
+        if command -v "$cmd" >/dev/null 2>&1; then
+            temp_cmd=$(command -v "$cmd")
+            break
+        fi
+    done
+    
+    # Check local installations
+    for path in "$HOME/.local/bin" "/usr/local/bin" "./"; do
+        for name in "temp-monitor" "temp_monitor.sh" "temp_monitor"; do
+            if [ -x "$path/$name" ]; then
+                temp_cmd="$path/$name"
+                break 2
+            fi
+        done
+    done
+    
+    if [ -n "$temp_cmd" ] && [ -x "$temp_cmd" ]; then
+        echo "$temp_cmd"
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Create universal desktop icon
+create_universal_icon() {
+    print_status "Creating universal desktop icon..."
+    
+    local icon_dir="$HOME/.local/share/icons/hicolor/48x48/apps"
+    mkdir -p "$icon_dir"
+    
+    # SVG icon that works everywhere
+    cat > "$icon_dir/temperature-monitor.svg" << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="48" height="48" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="tempGradient" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" style="stop-color:#22c55e;stop-opacity:1" />
+      <stop offset="33%" style="stop-color:#eab308;stop-opacity:1" />
+      <stop offset="66%" style="stop-color:#f97316;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#ef4444;stop-opacity:1" />
+    </linearGradient>
+    <radialGradient id="bulbGradient" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" style="stop-color:#fca5a5;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#dc2626;stop-opacity:1" />
+    </radialGradient>
+  </defs>
+  
+  <!-- Background circle -->
+  <circle cx="24" cy="24" r="22" fill="#f8fafc" stroke="#e2e8f0" stroke-width="2"/>
+  
+  <!-- Thermometer body -->
+  <rect x="20" y="8" width="6" height="26" rx="3" ry="3" fill="#e2e8f0" stroke="#94a3b8" stroke-width="1"/>
+  
+  <!-- Temperature liquid -->
+  <rect x="21.5" y="10" width="3" height="22" rx="1.5" ry="1.5" fill="url(#tempGradient)"/>
+  
+  <!-- Thermometer bulb -->
+  <circle cx="23" cy="37" r="5" fill="url(#bulbGradient)" stroke="#b91c1c" stroke-width="1"/>
+  
+  <!-- Scale marks -->
+  <g stroke="#64748b" stroke-width="0.8">
+    <line x1="26.5" y1="12" x2="29" y2="12"/>
+    <line x1="26.5" y1="16" x2="28" y2="16"/>
+    <line x1="26.5" y1="20" x2="29" y2="20"/>
+    <line x1="26.5" y1="24" x2="28" y2="24"/>
+    <line x1="26.5" y1="28" x2="29" y2="28"/>
+  </g>
+  
+  <!-- CPU chip -->
+  <rect x="6" y="6" width="10" height="10" rx="1" ry="1" fill="#1f2937" stroke="#4b5563" stroke-width="1"/>
+  <rect x="7.5" y="7.5" width="7" height="7" rx="0.5" ry="0.5" fill="#374151"/>
+  
+  <!-- CPU pins -->
+  <g fill="#9ca3af">
+    <circle cx="9" cy="9" r="0.7"/>
+    <circle cx="13" cy="9" r="0.7"/>
+    <circle cx="9" cy="13" r="0.7"/>
+    <circle cx="13" cy="13" r="0.7"/>
+  </g>
+  
+  <!-- Temperature label -->
+  <text x="33" y="18" font-family="monospace" font-size="8" font-weight="bold" fill="#64748b">°C</text>
+</svg>
+EOF
+    
+    # Try to create PNG versions for better compatibility
+    if command -v inkscape >/dev/null 2>&1; then
+        for size in 16 22 24 32 48 64 128; do
+            local size_dir="$HOME/.local/share/icons/hicolor/${size}x${size}/apps"
+            mkdir -p "$size_dir"
+            inkscape "$icon_dir/temperature-monitor.svg" \
+                --export-filename="$size_dir/temperature-monitor.png" \
+                --export-width=$size --export-height=$size 2>/dev/null || true
+        done
+        print_success "Multi-size PNG icons created"
+    elif command -v convert >/dev/null 2>&1; then
+        convert "$icon_dir/temperature-monitor.svg" \
+            "$icon_dir/temperature-monitor.png" 2>/dev/null || true
+        print_success "PNG icon created with ImageMagick"
+    fi
+    
+    # Update icon cache for all DEs
+    for cache_cmd in "gtk-update-icon-cache" "update-icon-caches"; do
+        if command -v "$cache_cmd" >/dev/null 2>&1; then
+            "$cache_cmd" "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+        fi
+    done
+    
+    print_success "Universal icon created"
+}
+
+# Create desktop file with universal compatibility
+create_desktop_file() {
+    local temp_cmd="$1"
+    local desktop_dir="$HOME/.local/share/applications"
+    local desktop_file="$desktop_dir/temperature-monitor.desktop"
+    
+    print_status "Creating universal desktop file..."
+    mkdir -p "$desktop_dir"
+    
+    cat > "$desktop_file" << EOF
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Temperature Monitor
+Name[it]=Monitor Temperature
+Name[es]=Monitor de Temperatura  
+Name[fr]=Moniteur de Température
+Name[de]=Temperatur-Monitor
+Comment=Real-time system temperature monitoring
+Comment[it]=Monitoraggio temperature di sistema in tempo reale
+Comment[es]=Monitoreo de temperatura del sistema en tiempo real
+Comment[fr]=Surveillance de température système en temps réel
+Comment[de]=Echtzeit-Systemtemperaturüberwachung
+GenericName=System Monitor
+GenericName[it]=Monitor di Sistema
+GenericName[es]=Monitor del Sistema
+GenericName[fr]=Moniteur Système
+GenericName[de]=System-Monitor
+Exec=$temp_cmd
+Icon=temperature-monitor
+Terminal=false
+Categories=System;Monitor;HardwareSettings;Utility;
+Keywords=temperature;sensors;monitoring;system;hardware;cpu;thermal;heat;
+Keywords[it]=temperatura;sensori;monitoraggio;sistema;hardware;cpu;termico;calore;
+Keywords[es]=temperatura;sensores;monitoreo;sistema;hardware;cpu;térmico;calor;
+Keywords[fr]=température;capteurs;surveillance;système;matériel;cpu;thermique;chaleur;
+Keywords[de]=temperatur;sensoren;überwachung;system;hardware;cpu;thermal;wärme;
+StartupNotify=true
+StartupWMClass=temperature-monitor
+NoDisplay=false
+Actions=test;configure;
+
+[Desktop Action test]
+Name=Show Current Temperatures
+Name[it]=Mostra Temperature Attuali
+Name[es]=Mostrar Temperaturas Actuales
+Name[fr]=Afficher Températures Actuelles
+Name[de]=Aktuelle Temperaturen Anzeigen
+Exec=$temp_cmd --test
+
+[Desktop Action configure]
+Name=Configure Settings
+Name[it]=Configura Impostazioni
+Name[es]=Configurar Ajustes
+Name[fr]=Configurer Paramètres
+Name[de]=Einstellungen Konfigurieren
+Exec=$temp_cmd --config
+EOF
+    
+    chmod +x "$desktop_file"
+    
+    # Validate desktop file
+    if command -v desktop-file-validate >/dev/null 2>&1; then
+        if desktop-file-validate "$desktop_file" 2>/dev/null; then
+            print_success "Desktop file validation passed"
+        else
+            print_warning "Desktop file has minor issues (will still work)"
+        fi
+    fi
+    
+    print_success "Universal desktop file created"
+}
+
+# Configure DE-specific integrations
+configure_desktop_specific() {
+    local de="$1"
+    
+    print_status "Configuring $de specific integration..."
+    
+    case "$de" in
+        "gnome")
+            print_status "GNOME integration:"
+            echo "  📁 App will appear in: Activities → Show Applications → Temperature Monitor"
+            echo "  🔍 Search 'Temperature' in Activities overview"
+            echo "  📌 Right-click to 'Add to Favorites' for dock"
+            echo "  ⌨️  Add keyboard shortcut: Settings → Keyboard → Custom Shortcuts"
+            ;;
+        "kde")
+            print_status "KDE/Plasma integration:"
+            echo "  📁 App will appear in: Application Menu → System → Temperature Monitor"
+            echo "  🔍 Search 'Temperature' in Application Menu"
+            echo "  📌 Right-click to 'Add to Panel' or 'Add to Favorites'"
+            echo "  ⌨️  Add shortcut: System Settings → Shortcuts → Custom Shortcuts"
+            ;;
+        "xfce")
+            print_status "XFCE integration:"
+            echo "  📁 App will appear in: Applications Menu → System → Temperature Monitor"
+            echo "  🔍 Search 'Temperature' in menu"
+            echo "  📌 Drag to panel for quick access"
+            echo "  ⌨️  Add shortcut: Settings → Keyboard → Application Shortcuts"
+            ;;
+        "mate")
+            print_status "MATE integration:"
+            echo "  📁 App will appear in: Applications → System Tools → Temperature Monitor"
+            echo "  📌 Right-click to add to panel"
+            echo "  ⌨️  Add shortcut: System → Preferences → Keyboard Shortcuts"
+            ;;
+        "cinnamon")
+            print_status "Cinnamon integration:"
+            echo "  📁 App will appear in: Menu → Administration → Temperature Monitor"
+            echo "  📌 Right-click to 'Add to panel' or 'Add to favorites'"
+            echo "  ⌨️  Add shortcut: System Settings → Keyboard → Custom Shortcuts"
+            ;;
+        "lxde")
+            print_status "LXDE/LXQt integration:"
+            echo "  📁 App will appear in: Menu → System Tools → Temperature Monitor"
+            echo "  📌 Add to panel via panel settings"
+            ;;
+        "wm")
+            print_status "Window Manager integration:"
+            echo "  ⌨️  Add to your WM config for keyboard launch"
+            echo "  🚀 Run from terminal: temp-monitor"
+            echo "  📄 Add to application launchers (rofi, dmenu, etc.)"
+            ;;
+        *)
+            print_status "Generic integration:"
+            echo "  📁 App should appear in System/Administration category"
+            echo "  🔍 Search for 'Temperature' in your app launcher" 
+            ;;
+    esac
+}
+
+# Update desktop databases
+update_desktop_databases() {
+    print_status "Updating desktop databases..."
+    
+    # Update application database
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
+        print_success "Application database updated"
+    fi
+    
+    # Update MIME database
+    if command -v update-mime-database >/dev/null 2>&1; then
+        update-mime-database "$HOME/.local/share/mime" 2>/dev/null || true
+    fi
+    
+    # Refresh GNOME Shell if running
+    if [ "$XDG_CURRENT_DESKTOP" = "GNOME" ] && command -v gdbus >/dev/null 2>&1; then
+        gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shell --method org.gnome.Shell.Eval 'Main.overview.hide(); Main.overview.show();' 2>/dev/null || true
+    fi
+}
+
+# Main installation
+main() {
+    echo "🌡️ Temperature Monitor - Universal Desktop Integration"
+    echo "====================================================="
+    echo
+    
+    # Detect environment
+    local de=$(detect_desktop_environment)
+    print_status "Desktop environment detected: $de"
+    
+    # Find temperature monitor
+    if temp_cmd=$(find_temp_monitor); then
+        print_success "Temperature Monitor found: $temp_cmd"
+    else
+        print_error "Temperature Monitor not found!"
+        echo "Install it first or run this script from the project directory"
+        exit 1
+    fi
+    
+    # Test that it works
+    if "$temp_cmd" --test >/dev/null 2>&1; then
+        print_success "Temperature Monitor is working"
+    else
+        print_error "Temperature Monitor has issues"
+        exit 1
+    fi
+    
+    # Create integration
+    create_universal_icon
+    create_desktop_file "$temp_cmd"
+    configure_desktop_specific "$de"
+    update_desktop_databases
+    
+    echo
+    echo "✅ UNIVERSAL DESKTOP INTEGRATION COMPLETE!"
+    echo "==========================================="
+    echo
+    echo "🚀 The app is now integrated in your desktop environment:"
+    echo "   📱 Look for 'Temperature Monitor' in your app menu"
+    echo "   🔍 Search 'temperature' in your launcher"
+    echo "   🎨 Custom thermometer icon included"
+    echo "   🌍 Multi-language support (EN/IT/ES/FR/DE)"
+    echo "   🖱️  Right-click for quick actions (test, configure)"
+    echo
+    echo "🎯 Supported desktop environments:"
+    echo "   ✅ GNOME • KDE/Plasma • XFCE • MATE • Cinnamon"
+    echo "   ✅ LXDE/LXQt • i3/Sway • Others"
+    echo
+    print_success "Temperature Monitor is ready to use! 🌡️"
+}
+
+# Run if called directly
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    main "$@"
+fi

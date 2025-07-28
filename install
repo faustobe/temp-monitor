@@ -1,0 +1,539 @@
+#!/bin/bash
+
+# Installer per Temperature Monitor
+# Installa automaticamente le dipendenze e configura lo script
+
+set -e
+
+SCRIPT_NAME="temp-monitor"
+INSTALL_DIR="$HOME/.local/bin"
+DESKTOP_DIR="$HOME/.local/share/applications"
+
+# Colori per output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Funzioni di utilità
+print_status() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+print_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# Detecta la distribuzione
+detect_distro() {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        DISTRO=$ID
+        VERSION=$VERSION_ID
+    elif [ -f /etc/redhat-release ]; then
+        DISTRO="rhel"
+    elif [ -f /etc/debian_version ]; then
+        DISTRO="debian"
+    else
+        DISTRO="unknown"
+    fi
+    
+    print_status "Distribuzione rilevata: $DISTRO"
+}
+
+# Installa dipendenze
+install_dependencies() {
+    print_status "Installazione dipendenze..."
+    
+    case $DISTRO in
+        ubuntu|debian|linuxmint)
+            print_status "Aggiornamento package list..."
+            sudo apt update
+            
+            # Pacchetti base sempre necessari
+            sudo apt install -y lm-sensors bc
+            
+            # Terminal con priorità alla trasparenza
+            print_status "Installazione terminal con supporto trasparenza..."
+            if ! command -v urxvt >/dev/null 2>&1; then
+                sudo apt install -y rxvt-unicode 2>/dev/null && print_success "urxvt installato (ottima trasparenza)" || print_warning "urxvt non disponibile"
+            fi
+            if ! command -v alacritty >/dev/null 2>&1; then
+                sudo apt install -y alacritty 2>/dev/null && print_success "alacritty installato (moderna trasparenza)" || print_warning "alacritty non disponibile nei repo standard"
+            fi
+            # Fallback se non c'è niente
+            command -v xterm >/dev/null 2>&1 || sudo apt install -y xterm 2>/dev/null || true
+            print_success "Terminal configurati per trasparenza"
+            ;;
+            
+        fedora|centos|rhel)
+            print_status "Installazione pacchetti Fedora/RHEL..."
+            sudo dnf install -y lm_sensors bc
+            sudo dnf install -y rxvt-unicode 2>/dev/null || print_warning "urxvt non disponibile"
+            sudo dnf install -y alacritty 2>/dev/null || print_warning "alacritty non disponibile"
+            command -v xterm >/dev/null 2>&1 || sudo dnf install -y xterm 2>/dev/null || true
+            print_success "Pacchetti installati"
+            ;;
+            
+        arch|manjaro)
+            print_status "Installazione pacchetti Arch..."
+            sudo pacman -S --noconfirm lm_sensors bc
+            sudo pacman -S --noconfirm rxvt-unicode 2>/dev/null || print_warning "urxvt non disponibile"
+            sudo pacman -S --noconfirm alacritty 2>/dev/null || print_warning "alacritty non disponibile"
+            command -v xterm >/dev/null 2>&1 || sudo pacman -S --noconfirm xterm 2>/dev/null || true
+            print_success "Pacchetti installati"
+            ;;
+            
+        opensuse*)
+            print_status "Installazione pacchetti openSUSE..."
+            sudo zypper install -y sensors bc
+            sudo zypper install -y rxvt-unicode 2>/dev/null || print_warning "urxvt non disponibile"
+            sudo zypper install -y alacritty 2>/dev/null || print_warning "alacritty non disponibile"
+            command -v xterm >/dev/null 2>&1 || sudo zypper install -y xterm 2>/dev/null || true
+            print_success "Pacchetti installati"
+            ;;
+            
+        *)
+            print_warning "Distribuzione non riconosciuta. Installa manualmente:"
+            echo "- lm-sensors"
+            echo "- bc"
+            echo "- xterm (opzionale, di solito già presente)"
+            ;;
+    esac
+    
+    print_success "Dipendenze installate"
+}
+
+# Configura sensori
+setup_sensors() {
+    print_status "Configurazione sensori..."
+    
+    if ! command -v sensors >/dev/null 2>&1; then
+        print_error "lm-sensors non installato correttamente"
+        exit 1
+    fi
+    
+    # Rileva sensori se non già fatto
+    if [ ! -f /etc/sensors3.conf ] && [ ! -f /etc/sensors.conf ]; then
+        print_status "Prima configurazione sensori..."
+        sudo sensors-detect --auto || true
+    fi
+    
+    # Test sensori
+    print_status "Test sensori..."
+    if sensors >/dev/null 2>&1; then
+        print_success "Sensori funzionanti"
+        sensors | grep -E "(temp|Core|Package)" | head -5
+    else
+        print_warning "Problemi con i sensori. Potrebbe essere necessario:"
+        echo "  sudo sensors-detect"
+        echo "  sudo modprobe coretemp"
+    fi
+}
+
+# Configurazione specifica per XFCE
+configure_xfce_integration() {
+    print_status "Configurazione integrazione XFCE..."
+    
+    # Controlla se siamo in XFCE
+    if [ "$XDG_CURRENT_DESKTOP" = "XFCE" ] || [ "$DESKTOP_SESSION" = "xfce" ]; then
+        print_success "Desktop XFCE rilevato"
+        
+        # Crea categoria personalizzata nel menu se non esiste
+        local menu_dir="$HOME/.config/menus"
+        mkdir -p "$menu_dir"
+        
+        # Suggerisce dove trovare l'applicazione nel menu
+        print_status "L'applicazione sarà disponibile in:"
+        echo "  📁 Menu Applicazioni → Sistema → Temperature Monitor"
+        echo "  🔍 Oppure cerca 'Temperature' nel menu"
+        
+        # Suggerisce shortcut da tastiera (opzionale)
+        echo "💡 Suggerimento: Puoi aggiungere una scorciatoia da tastiera:"
+        echo "   Impostazioni → Tastiera → Scorciatoie applicazioni"
+        echo "   Comando: $INSTALL_DIR/$SCRIPT_NAME"
+        echo "   Esempio tasto: Ctrl+Alt+T"
+        
+    else
+        print_warning "Desktop XFCE non rilevato (attuale: ${XDG_CURRENT_DESKTOP:-sconosciuto})"
+        print_status "L'applicazione sarà comunque disponibile nel menu di sistema"
+    fi
+}
+
+# Test finale con integrazione XFCE
+test_xfce_integration() {
+    print_status "Test integrazione XFCE..."
+    
+    # Test file .desktop
+    if [ -f "$DESKTOP_DIR/temp-monitor.desktop" ]; then
+        if desktop-file-validate "$DESKTOP_DIR/temp-monitor.desktop" 2>/dev/null; then
+            print_success "File .desktop valido"
+        else
+            print_warning "File .desktop ha problemi minori (funzionerà comunque)"
+        fi
+    fi
+    
+    # Test icona
+    local icon_found=false
+    for ext in png svg; do
+        if [ -f "$HOME/.local/share/icons/hicolor/48x48/apps/temperature-monitor.$ext" ]; then
+            print_success "Icona personalizzata trovata (.$ext)"
+            icon_found=true
+            break
+        fi
+    done
+    
+    if [ "$icon_found" = false ]; then
+        print_warning "Icona personalizzata non trovata, usando icona di sistema"
+    fi
+    
+    # Test comando
+    if [ -x "$INSTALL_DIR/$SCRIPT_NAME" ]; then
+        print_success "Comando temperature monitor funzionante"
+    else
+        print_error "Problema con l'installazione del comando"
+        return 1
+    fi
+}
+
+# Installa lo script
+install_script() {
+    print_status "Installazione script temperature monitor..."
+    
+    # Crea directory se non esistono
+    mkdir -p "$INSTALL_DIR"
+    mkdir -p "$DESKTOP_DIR"
+    
+    # Copia script principale
+    if [ -f "temp_monitor.sh" ]; then
+        cp temp_monitor.sh "$INSTALL_DIR/$SCRIPT_NAME"
+    else
+        print_error "File temp_monitor.sh non trovato nella directory corrente"
+        print_status "Scarica lo script da GitHub o crea il file manualmente"
+        exit 1
+    fi
+    
+    # Rendi eseguibile
+    chmod +x "$INSTALL_DIR/$SCRIPT_NAME"
+    
+    print_success "Script installato in $INSTALL_DIR/$SCRIPT_NAME"
+}
+
+# Crea file .desktop per l'avvio dal menu XFCE
+create_desktop_entry() {
+    print_status "Creazione entry nel menu XFCE..."
+    
+    # Trova la migliore icona disponibile per temperature
+    local icon_name=""
+    
+    # Prova diverse icone in ordine di preferenza
+    local icon_candidates=(
+        "temperature"
+        "sensors-temperature"
+        "temp"
+        "thermometer"
+        "hardware-monitoring"
+        "system-monitor"
+        "utilities-system-monitor"
+        "applications-system"
+        "cpu"
+        "hardware"
+    )
+    
+    for candidate in "${icon_candidates[@]}"; do
+        if gtk-update-icon-cache --dry-run /usr/share/icons/hicolor 2>/dev/null | grep -q "$candidate" ||
+           find /usr/share/icons -name "*$candidate*" -type f 2>/dev/null | head -1 | grep -q .; then
+            icon_name="$candidate"
+            print_success "Icona trovata: $icon_name"
+            break
+        fi
+    done
+    
+    # Fallback a icona di sistema
+    if [ -z "$icon_name" ]; then
+        icon_name="applications-system"
+        print_warning "Usando icona fallback: $icon_name"
+    fi
+    
+    cat > "$DESKTOP_DIR/temp-monitor.desktop" << EOF
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Temperature Monitor
+Name[it]=Monitor Temperature
+Comment=Monitor delle temperature di sistema in tempo reale
+Comment[it]=Monitora le temperature del sistema in tempo reale
+GenericName=Temperature Monitor
+GenericName[it]=Monitor Temperature
+Exec=$INSTALL_DIR/$SCRIPT_NAME
+Icon=$icon_name
+Terminal=false
+Categories=System;Monitor;HardwareSettings;
+Keywords=temperature;sensors;monitoring;system;hardware;cpu;thermal;
+Keywords[it]=temperatura;sensori;monitoraggio;sistema;hardware;cpu;termico;
+StartupNotify=true
+MimeType=
+Actions=
+
+[Desktop Action test]
+Name=Test Temperature
+Name[it]=Test Temperature
+Exec=$INSTALL_DIR/$SCRIPT_NAME --test
+OnlyShowIn=XFCE;
+
+[Desktop Action configure]
+Name=Configure Transparency
+Name[it]=Configura Trasparenza
+Exec=$INSTALL_DIR/$SCRIPT_NAME --transparency
+OnlyShowIn=XFCE;
+EOF
+    
+    chmod +x "$DESKTOP_DIR/temp-monitor.desktop"
+    
+    # Aggiorna cache icone XFCE se possibile
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
+    fi
+    
+    print_success "Entry creata nel menu XFCE con icona $icon_name"
+}
+
+# Scarica e installa icona personalizzata per temperature monitor
+install_custom_icon() {
+    print_status "Installazione icona personalizzata..."
+    
+    local icon_dir="$HOME/.local/share/icons/hicolor/48x48/apps"
+    local icon_file="$icon_dir/temperature-monitor.png"
+    
+    # Crea directory se non esiste
+    mkdir -p "$icon_dir"
+    
+    # Crea icona SVG personalizzata usando caratteri unicode
+    local svg_content='<?xml version="1.0" encoding="UTF-8"?>
+<svg width="48" height="48" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="tempGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#ff4444;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#ffaa00;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#44ff44;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Termometro base -->
+  <rect x="18" y="8" width="8" height="28" rx="4" ry="4" fill="#cccccc" stroke="#888888" stroke-width="1"/>
+  
+  <!-- Liquido termometro -->
+  <rect x="20" y="10" width="4" height="24" rx="2" ry="2" fill="url(#tempGradient)"/>
+  
+  <!-- Bulbo termometro -->
+  <circle cx="22" cy="38" r="6" fill="#ff4444" stroke="#cc0000" stroke-width="1"/>
+  
+  <!-- Tacche temperatura -->
+  <line x1="26" y1="12" x2="30" y2="12" stroke="#666" stroke-width="1"/>
+  <line x1="26" y1="16" x2="28" y2="16" stroke="#666" stroke-width="1"/>
+  <line x1="26" y1="20" x2="30" y2="20" stroke="#666" stroke-width="1"/>
+  <line x1="26" y1="24" x2="28" y2="24" stroke="#666" stroke-width="1"/>
+  <line x1="26" y1="28" x2="30" y2="28" stroke="#666" stroke-width="1"/>
+  
+  <!-- Icona CPU stilizzata -->
+  <rect x="4" y="4" width="12" height="12" rx="1" ry="1" fill="#333333" stroke="#666666" stroke-width="1"/>
+  <rect x="6" y="6" width="8" height="8" fill="#555555"/>
+  <circle cx="8" cy="8" r="1" fill="#aaaaaa"/>
+  <circle cx="12" cy="8" r="1" fill="#aaaaaa"/>
+  <circle cx="8" cy="12" r="1" fill="#aaaaaa"/>
+  <circle cx="12" cy="12" r="1" fill="#aaaaaa"/>
+</svg>'
+    
+    # Salva icona SVG
+    local svg_file="$icon_dir/temperature-monitor.svg"
+    echo "$svg_content" > "$svg_file"
+    
+    # Prova a convertire in PNG se inkscape è disponibile
+    if command -v inkscape >/dev/null 2>&1; then
+        inkscape "$svg_file" --export-filename="$icon_file" --export-width=48 --export-height=48 2>/dev/null && \
+        print_success "Icona PNG creata con inkscape" || \
+        print_warning "Conversione PNG fallita, usando SVG"
+    elif command -v convert >/dev/null 2>&1; then
+        convert "$svg_file" "$icon_file" 2>/dev/null && \
+        print_success "Icona PNG creata con ImageMagick" || \
+        print_warning "Conversione PNG fallita, usando SVG"
+    else
+        print_warning "inkscape/ImageMagick non disponibili, usando icona SVG"
+    fi
+    
+    # Aggiorna il file .desktop per usare l'icona personalizzata
+    if [ -f "$svg_file" ] || [ -f "$icon_file" ]; then
+        sed -i "s/^Icon=.*/Icon=temperature-monitor/" "$DESKTOP_DIR/temp-monitor.desktop" 2>/dev/null || true
+        print_success "Icona personalizzata installata e configurata"
+    fi
+    
+    # Aggiorna cache icone
+    if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+        gtk-update-icon-cache "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+    fi
+}
+
+# Aggiunge al PATH se necessario
+update_path() {
+    if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
+        print_status "Aggiunta $INSTALL_DIR al PATH..."
+        
+        # Aggiunge a .bashrc
+        if [ -f "$HOME/.bashrc" ]; then
+            echo "export PATH=\"\$PATH:$INSTALL_DIR\"" >> "$HOME/.bashrc"
+            print_success "PATH aggiornato in .bashrc"
+        fi
+        
+        # Aggiunge a .profile se esiste
+        if [ -f "$HOME/.profile" ]; then
+            echo "export PATH=\"\$PATH:$INSTALL_DIR\"" >> "$HOME/.profile"
+            print_success "PATH aggiornato in .profile"
+        fi
+        
+        print_warning "Riavvia il terminale o esegui: source ~/.bashrc"
+    else
+        print_success "PATH già configurato"
+    fi
+}
+
+# Crea alias utili
+create_aliases() {
+    print_status "Creazione alias utili..."
+    
+    ALIASES="
+# Temperature Monitor aliases
+alias temp='$INSTALL_DIR/$SCRIPT_NAME'
+alias temp-monitor='$INSTALL_DIR/$SCRIPT_NAME'
+alias temp-test='$INSTALL_DIR/$SCRIPT_NAME --test'
+alias temperatures='$INSTALL_DIR/$SCRIPT_NAME --test'
+"
+    
+    if [ -f "$HOME/.bashrc" ]; then
+        if ! grep -q "Temperature Monitor aliases" "$HOME/.bashrc"; then
+            echo "$ALIASES" >> "$HOME/.bashrc"
+            print_success "Alias aggiunti a .bashrc"
+        fi
+    fi
+}
+
+# Test finale
+final_test() {
+    print_status "Test finale dell'installazione..."
+    
+    # Test comando
+    if [ -x "$INSTALL_DIR/$SCRIPT_NAME" ]; then
+        print_success "Script installato e eseguibile"
+    else
+        print_error "Problema con l'installazione dello script"
+        exit 1
+    fi
+    
+    # Test sensori
+    if command -v sensors >/dev/null 2>&1; then
+        print_success "Comando sensors disponibile"
+    else
+        print_error "Comando sensors non disponibile"
+        exit 1
+    fi
+    
+    # Test bc
+    if command -v bc >/dev/null 2>&1; then
+        print_success "Comando bc disponibile"
+    else
+        print_warning "Comando bc non disponibile (funzionalità limitate)"
+    fi
+    
+    # Test terminal
+    if command -v xterm >/dev/null 2>&1 || command -v gnome-terminal >/dev/null 2>&1 || command -v konsole >/dev/null 2>&1; then
+        print_success "Terminal grafico disponibile"
+    else
+        print_warning "Nessun terminal grafico trovato"
+    fi
+    
+    print_success "Installazione completata!"
+}
+
+# Mostra istruzioni finali
+show_instructions() {
+    echo
+    echo "=================================="
+    echo "🌡️  INSTALLAZIONE COMPLETATA!"
+    echo "=================================="
+    echo
+    echo "🚀 Modi per avviare Temperature Monitor:"
+    echo "1. 📁 Menu XFCE: Applicazioni → Sistema → Temperature Monitor"
+    echo "2. 🔍 Cerca 'Temperature' nel menu XFCE"
+    echo "3. ⌨️  Da terminale: temp"
+    echo "4. 🖱️  Click destro sul desktop → Applicazioni → Sistema"
+    echo
+    echo "📋 Comandi da terminale:"
+    echo "- temp                       # Apre finestra monitor trasparente"
+    echo "- temp --test               # Mostra temperature attuali"
+    echo "- temp --transparency       # Configura livello trasparenza"
+    echo "- temperatures              # Mostra temperature velocemente"
+    echo
+    echo "🎨 Icona e integrazione XFCE:"
+    echo "- ✅ Icona personalizzata termometro installata"
+    echo "- ✅ Integrazione completa nel menu XFCE"
+    echo "- ✅ Supporto multi-lingua (IT/EN)"
+    echo "- ✅ Azioni contestuali (test, configura)"
+    echo
+    echo "💡 Suggerimenti XFCE:"
+    echo "- Aggiungi scorciatoia: Impostazioni → Tastiera → Scorciatoie"
+    echo "- Comando: $INSTALL_DIR/$SCRIPT_NAME"
+    echo "- Tasto suggerito: Ctrl+Alt+T"
+    echo "- Puoi trascinare l'icona sul pannello per accesso rapido"
+    echo
+    echo "🌟 Caratteristiche finali:"
+    echo "- Finestra trasparente (se usi urxvt/alacritty)"
+    echo "- Layout pulito senza flickering"
+    echo "- Aggiornamento automatico ogni 2 secondi"
+    echo "- Colori che cambiano con la temperatura"
+    echo
+    echo "Per la prima volta, configura i sensori:"
+    echo "sudo sensors-detect"
+    echo
+    print_success "Buon monitoraggio delle temperature! 🌡️✨"
+}
+
+# Main
+main() {
+    echo "🌡️ Temperature Monitor - Installer"
+    echo "==================================="
+    echo
+    
+    # Controllo permessi
+    if [ "$EUID" -eq 0 ]; then
+        print_error "Non eseguire questo script come root!"
+        exit 1
+    fi
+    
+    print_status "Avvio installazione automatica..."
+    
+    detect_distro
+    install_dependencies
+    setup_sensors
+    install_script
+    create_desktop_entry
+    install_custom_icon
+    configure_xfce_integration
+    update_path
+    create_aliases
+    final_test
+    test_xfce_integration
+    show_instructions
+}
+
+# Esegui solo se chiamato direttamente
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    main "$@"
+fi

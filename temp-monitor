@@ -1,0 +1,654 @@
+#!/bin/bash
+
+# Termometro CPU - Monitor termico con soglie personalizzabili e notifiche
+# Versione 1.5 con configurazione avanzata
+
+set -e
+
+# Configurazione base
+UPDATE_INTERVAL=2
+POSITION_X=50
+POSITION_Y=50
+TRANSPARENCY_LEVEL="d000"
+
+# Colori
+COLOR_NORMAL="\033[0;32m"     # Verde
+COLOR_WARNING="\033[1;33m"    # Giallo
+COLOR_HIGH="\033[0;33m"       # Arancione
+COLOR_CRITICAL="\033[1;31m"   # Rosso
+COLOR_RESET="\033[0m"
+COLOR_HEADER="\033[1;36m"     # Ciano bold
+COLOR_TIME="\033[1;37m"       # Bianco
+
+# Variabili soglie (valori di default, sovrascritti da config)
+TEMP_NORMAL=60
+TEMP_WARNING=75
+TEMP_HIGH=85
+TEMP_CRITICAL=90
+
+# Variabili notifiche
+ENABLE_NOTIFICATIONS=true
+NOTIFY_WARNING=true
+NOTIFY_CRITICAL=true
+NOTIFY_COOLDOWN=300
+LAST_NOTIFICATION=0
+NOTIFICATION_SENT_LEVEL=""
+
+# File temporaneo
+PID_FILE="/tmp/temp_monitor_pid_$$"
+
+# Funzione di pulizia
+cleanup() {
+    [ -f "$PID_FILE" ] && rm -f "$PID_FILE"
+    jobs -p | xargs -r kill 2>/dev/null
+    exit 0
+}
+
+trap cleanup SIGINT SIGTERM EXIT
+
+# Debug function
+debug_print() {
+    echo "🔍 DEBUG: $1" >&2
+}
+
+# Carica configurazione personalizzata
+load_config() {
+    local config_dir="$HOME/.config/termometro-cpu"
+    local config_file="$config_dir/config"
+    
+    # Crea directory se non esiste
+    mkdir -p "$config_dir"
+    
+    # Crea config di default se non esiste
+    if [ ! -f "$config_file" ]; then
+        cat > "$config_file" << 'CONFIG_EOF'
+# Configurazione Termometro CPU
+# Soglie temperature in gradi Celsius
+
+TEMP_NORMAL=60     # Verde: temperature normali
+TEMP_WARNING=75    # Giallo: temperature elevate  
+TEMP_HIGH=85       # Arancione: temperature alte
+TEMP_CRITICAL=90   # Rosso: temperature critiche
+
+# Notifiche desktop (true/false)
+ENABLE_NOTIFICATIONS=true
+NOTIFY_WARNING=true        # Notifica a temperature elevate
+NOTIFY_CRITICAL=true       # Notifica a temperature critiche
+NOTIFY_COOLDOWN=300        # Secondi tra notifiche (evita spam)
+
+# Intervallo aggiornamento (secondi)
+UPDATE_INTERVAL=2
+CONFIG_EOF
+        echo "✅ Creato file configurazione: $config_file"
+    fi
+    
+    # Carica configurazione
+    if [ -f "$config_file" ]; then
+        source "$config_file"
+        debug_print "Config caricata: Normal<$TEMP_NORMAL, Warning<$TEMP_WARNING, High<$TEMP_HIGH, Critical>$TEMP_CRITICAL"
+    fi
+}
+
+# Test sensori
+test_sensors() {
+    debug_print "Testando comando sensors..."
+    
+    if ! command -v sensors >/dev/null 2>&1; then
+        echo "❌ ERRORE: comando 'sensors' non trovato!"
+        echo "📦 Installa con: sudo apt install lm-sensors"
+        exit 1
+    fi
+    
+    debug_print "Comando sensors trovato ✅"
+    
+    if ! sensors >/dev/null 2>&1; then
+        echo "❌ ERRORE: sensors non funziona!"
+        echo "🔧 Esegui: sudo sensors-detect"
+        exit 1
+    fi
+    
+    debug_print "Sensors funziona ✅"
+    
+    local temp_count=$(sensors | grep -E "(temp|Core|Package)" | wc -l)
+    if [ "$temp_count" -eq 0 ]; then
+        echo "⚠️  WARNING: Nessuna temperatura trovata!"
+        exit 1
+    fi
+    
+    debug_print "Trovate $temp_count righe di temperature ✅"
+}
+
+# Determina colore basato su soglie personalizzabili
+get_temp_color() {
+    local temp_value="$1"
+    local temp_int=$(echo "$temp_value" | sed 's/+//;s/°C//' | cut -d'.' -f1)
+    
+    if [ "$temp_int" -gt "$TEMP_CRITICAL" ]; then
+        echo "${COLOR_CRITICAL}🔴${COLOR_RESET}"
+    elif [ "$temp_int" -gt "$TEMP_HIGH" ]; then
+        echo "${COLOR_HIGH}🟠${COLOR_RESET}"
+    elif [ "$temp_int" -gt "$TEMP_WARNING" ]; then
+        echo "${COLOR_WARNING}🟡${COLOR_RESET}"
+    else
+        echo "${COLOR_NORMAL}🟢${COLOR_RESET}"
+    fi
+}
+
+# Sistema notifiche intelligenti
+send_notification() {
+    local temp_value="$1"
+    local sensor_name="$2"
+    local temp_int=$(echo "$temp_value" | sed 's/+//;s/°C//' | cut -d'.' -f1)
+    local current_time=$(date +%s)
+    
+    # Controlla se notifiche sono abilitate
+    [ "$ENABLE_NOTIFICATIONS" != "true" ] && return
+    
+    # Controlla se notify-send è disponibile
+    if ! command -v notify-send >/dev/null 2>&1; then
+        debug_print "notify-send non disponibile"
+        return
+    fi
+    
+    local notification_level=""
+    local message=""
+    local urgency="normal"
+    
+    # Determina tipo di notifica
+    if [ "$temp_int" -gt "$TEMP_CRITICAL" ] && [ "$NOTIFY_CRITICAL" = "true" ]; then
+        notification_level="critical"
+        message="🔥 TEMPERATURA CRITICA!\n$sensor_name: $temp_value\n⚠️ Chiudi applicazioni pesanti!"
+        urgency="critical"
+    elif [ "$temp_int" -gt "$TEMP_HIGH" ] && [ "$NOTIFY_WARNING" = "true" ]; then
+        notification_level="high"
+        message="🟠 Temperature elevate\n$sensor_name: $temp_value\n💡 Verifica carico sistema"
+        urgency="normal"
+    else
+        return  # Niente notifica per temperature normali
+    fi
+    
+    # Evita spam di notifiche
+    local time_diff=$((current_time - LAST_NOTIFICATION))
+    if [ "$time_diff" -lt "$NOTIFY_COOLDOWN" ] && [ "$NOTIFICATION_SENT_LEVEL" = "$notification_level" ]; then
+        return
+    fi
+    
+    # Invia notifica
+    notify-send "🌡️ Termometro CPU" \
+                "$message" \
+                --urgency="$urgency" \
+                --icon=dialog-warning \
+                --expire-time=5000
+    
+    LAST_NOTIFICATION=$current_time
+    NOTIFICATION_SENT_LEVEL="$notification_level"
+    
+    debug_print "Notifica inviata: $notification_level per $sensor_name ($temp_value)"
+}
+
+# Funzione per ottenere temperature con soglie personalizzabili
+get_temperatures() {
+    debug_print "Ottenendo temperature..."
+    
+    sensors | grep -E "(temp|Core|Package)" | while read -r line; do
+        sensor_name=$(echo "$line" | sed 's/:.*$//' | sed 's/^[[:space:]]*//')
+        temp_part=$(echo "$line" | sed 's/^[^:]*://')
+        temp_value=$(echo "$temp_part" | grep -oE '[+-]?[0-9]+\.[0-9]+°C' | head -1)
+        
+        if [ -n "$temp_value" ]; then
+            # Determina colore con soglie personalizzabili
+            local dot_symbol=$(get_temp_color "$temp_value")
+            
+            # Invia notifica se necessario
+            send_notification "$temp_value" "$sensor_name"
+            
+            printf "%-15s %8s %s\n" "$sensor_name:" "$temp_value" "$dot_symbol"
+        #else
+        #    echo "$sensor_name"
+        fi
+    done | sort
+}
+
+# Funzione per ottenere processi top CPU
+get_top_processes() {
+    debug_print "Ottenendo processi con maggior consumo CPU..."
+    
+    ps -eo pcpu,comm --no-headers --sort=-pcpu | head -3 | while read -r cpu_usage process_name; do
+        clean_name=$(echo "$process_name" | sed 's|.*/||' | cut -d' ' -f1)
+        cpu_int=$(echo "$cpu_usage" | cut -d'.' -f1)
+        if [ "$cpu_int" -gt 1 ]; then
+            printf "%-12s %s%%\n" "$clean_name" "$cpu_usage"
+        fi
+    done
+}
+
+# Calcola dimensioni finestra
+calculate_window_size() {
+    debug_print "Calcolando dimensioni finestra..."
+    
+    local temp_output=$(get_temperatures | sed 's/\x1b\[[0-9;]*m//g')
+    local lines=$(echo "$temp_output" | wc -l)
+    
+    local fixed_width=26
+    lines=$((lines + 11))
+    
+    [ $lines -lt 8 ] && lines=8
+    [ $lines -gt 25 ] && lines=25
+    
+    debug_print "Dimensioni con CPU monitor: ${fixed_width}x${lines}"
+    echo "${fixed_width}x${lines}"
+}
+
+# Rileva terminal disponibili
+detect_terminals() {
+    debug_print "Rilevando terminal disponibili..."
+    
+    local terminals=()
+    
+    command -v urxvt >/dev/null 2>&1 && terminals+=("urxvt")
+    command -v alacritty >/dev/null 2>&1 && terminals+=("alacritty")
+    command -v kitty >/dev/null 2>&1 && terminals+=("kitty")
+    command -v konsole >/dev/null 2>&1 && terminals+=("konsole")
+    command -v gnome-terminal >/dev/null 2>&1 && terminals+=("gnome-terminal")
+    command -v xfce4-terminal >/dev/null 2>&1 && terminals+=("xfce4-terminal")
+    command -v xterm >/dev/null 2>&1 && terminals+=("xterm")
+    command -v lxterminal >/dev/null 2>&1 && terminals+=("lxterminal")
+    
+    debug_print "Terminal trovati: ${terminals[*]}"
+    
+    if [ ${#terminals[@]} -eq 0 ]; then
+        echo "❌ Nessun terminal grafico trovato!" >&2
+        return 1
+    fi
+    
+    debug_print "Terminal disponibili: ${terminals[*]} (priorità trasparenza)"
+    echo "${terminals[0]}"
+}
+
+# Crea script monitor interno con soglie personalizzabili
+create_monitor_script() {
+    local script_path="/tmp/temp_monitor_$$"
+    debug_print "Creando script monitor: $script_path"
+    
+    cat > "$script_path" << EOF
+#!/bin/bash
+
+COLOR_NORMAL="\033[0;32m"
+COLOR_WARNING="\033[1;33m"
+COLOR_HIGH="\033[0;33m"
+COLOR_CRITICAL="\033[1;31m"
+COLOR_RESET="\033[0m"
+COLOR_HEADER="\033[1;36m"
+
+# Soglie personalizzabili (ereditate dallo script principale)
+TEMP_NORMAL=$TEMP_NORMAL
+TEMP_WARNING=$TEMP_WARNING
+TEMP_HIGH=$TEMP_HIGH
+TEMP_CRITICAL=$TEMP_CRITICAL
+
+# Configurazione notifiche (ereditate dallo script principale)  
+ENABLE_NOTIFICATIONS=$ENABLE_NOTIFICATIONS
+NOTIFY_WARNING=$NOTIFY_WARNING
+NOTIFY_CRITICAL=$NOTIFY_CRITICAL
+UPDATE_INTERVAL=$UPDATE_INTERVAL
+
+previous_output=""
+cursor_hidden=false
+
+hide_cursor() {
+    if [ "\$cursor_hidden" = false ]; then
+        printf "\033[?25l"
+        cursor_hidden=true
+    fi
+}
+
+show_cursor() {
+    if [ "\$cursor_hidden" = true ]; then
+        printf "\033[?25h"
+        cursor_hidden=false
+    fi
+}
+
+cleanup() {
+    show_cursor
+    printf "\033[0m"
+    clear
+    echo -e "\${COLOR_HEADER}🌡️ Termometro CPU chiuso\${COLOR_RESET}"
+    exit 0
+}
+
+trap cleanup SIGINT SIGTERM EXIT
+
+get_temp_color() {
+    local temp_value="\$1"
+    local temp_int=\$(echo "\$temp_value" | sed 's/+//;s/°C//' | cut -d'.' -f1)
+    
+    if [ "\$temp_int" -gt "\$TEMP_CRITICAL" ]; then
+        echo "\${COLOR_CRITICAL}🔴\${COLOR_RESET}"
+    elif [ "\$temp_int" -gt "\$TEMP_HIGH" ]; then
+        echo "\${COLOR_HIGH}🟠\${COLOR_RESET}"
+    elif [ "\$temp_int" -gt "\$TEMP_WARNING" ]; then
+        echo "\${COLOR_WARNING}🟡\${COLOR_RESET}"
+    else
+        echo "\${COLOR_NORMAL}🟢\${COLOR_RESET}"
+    fi
+}
+
+get_temperatures() {
+    sensors | grep -E "(temp|Core|Package)" | while read -r line; do
+        sensor_name=\$(echo "\$line" | sed 's/:.*\$//' | sed 's/^[[:space:]]*//')
+        temp_part=\$(echo "\$line" | sed 's/^[^:]*://')
+        
+        temp_value=\$(echo "\$temp_part" | grep -oE '[+-]?[0-9]+\.[0-9]+°C' | head -1)
+        
+        if [ -n "\$temp_value" ]; then
+            local dot_symbol=\$(get_temp_color "\$temp_value")
+            printf "%-15s %8s %s\n" "\$sensor_name:" "\$temp_value" "\$dot_symbol"
+        # RIMUOVI COMPLETAMENTE QUESTA PARTE:
+        # else
+        #     echo "\$sensor_name"
+        fi
+    done | sort  
+}
+
+get_top_processes() {
+    ps -eo pcpu,comm --no-headers --sort=-pcpu | head -3 | while read -r cpu_usage process_name; do
+        clean_name=\$(echo "\$process_name" | sed 's|.*/||' | cut -d' ' -f1)
+        cpu_int=\$(echo "\$cpu_usage" | cut -d'.' -f1)
+        if [ "\$cpu_int" -gt 1 ]; then
+            printf "%-12s %s%%\n" "\$clean_name" "\$cpu_usage"
+        fi
+    done
+}
+
+update_display() {
+    local current_temps=\$(get_temperatures)
+    local top_procs=\$(get_top_processes)
+    
+    local new_output=""
+    new_output="\${COLOR_HEADER}🌡️ Termometro CPU\${COLOR_RESET}"
+    new_output="\${new_output}\n\${COLOR_HEADER}──────────────────────────\${COLOR_RESET}"
+    new_output="\${new_output}\n\${current_temps}"
+    
+    if [ -n "\$top_procs" ]; then
+        new_output="\${new_output}\n\${COLOR_HEADER}──────────────────────────\${COLOR_RESET}"
+        new_output="\${new_output}\n\${COLOR_WARNING}Top CPU:\${COLOR_RESET}"
+        new_output="\${new_output}\n\${top_procs}"
+    fi
+    
+    new_output="\${new_output}\n\${COLOR_HEADER}──────────────────────────\${COLOR_RESET}"
+    new_output="\${new_output}\n\${COLOR_HEADER}Ctrl+C per uscire\${COLOR_RESET}"
+    
+    if [ "\$new_output" != "\$previous_output" ]; then
+        hide_cursor
+        printf "\033[H\033[J"
+        echo -e "\$new_output"
+        previous_output="\$new_output"
+    fi
+}
+
+clear
+hide_cursor
+
+echo -e "\${COLOR_HEADER}🌡️ Termometro CPU v1.5\${COLOR_RESET}"
+echo -e "\${COLOR_HEADER}======================\${COLOR_RESET}"
+echo
+echo -e "\${COLOR_HEADER}⚙️ Configurazione attiva:\${COLOR_RESET}"
+echo -e "   🟢 Normale:   < \${TEMP_NORMAL}°C"
+echo -e "   🟡 Elevata:   \${TEMP_WARNING}-\${TEMP_HIGH}°C"  
+echo -e "   🟠 Alta:      \${TEMP_HIGH}-\${TEMP_CRITICAL}°C"
+echo -e "   🔴 Critica:   > \${TEMP_CRITICAL}°C"
+echo
+echo -e "\${COLOR_HEADER}🔔 Notifiche: \$([ \"\$ENABLE_NOTIFICATIONS\" = \"true\" ] && echo ✅ on || echo ❌ off)\${COLOR_RESET}"
+echo -e "\${COLOR_HEADER}🔄 Aggiornamento: $UPDATE_INTERVAL\s\${COLOR_RESET}"
+echo
+echo -e "\${COLOR_HEADER}Avvio monitoraggio...\${COLOR_RESET}"
+sleep 3
+
+while true; do
+    update_display
+    sleep $UPDATE_INTERVAL
+done
+EOF
+    
+    chmod +x "$script_path"
+    echo "$script_path"
+}
+
+# Avvia terminal
+launch_terminal() {
+    debug_print "Avviando terminal monitor..."
+    
+    test_sensors
+    
+    local terminal=$(detect_terminals)
+    if [ $? -ne 0 ] || [ -z "$terminal" ]; then
+        echo "❌ Impossibile procedere senza terminal grafico" >&2
+        return 1
+    fi
+    
+    terminal=$(echo "$terminal" | tr -d ' \t\n\r' | head -1)
+    
+    local geometry=$(calculate_window_size)
+    debug_print "Usando terminal: $terminal"
+    debug_print "Geometria: $geometry"
+    
+    local monitor_script=$(create_monitor_script)
+    debug_print "Script monitor: $monitor_script"
+    
+    echo "🚀 Avvio Termometro CPU..."
+    echo "📱 Terminal: $terminal"
+    echo "📐 Dimensioni: $geometry"
+    echo "🎛️ Soglie: 🟢<${TEMP_NORMAL}° 🟡${TEMP_WARNING}° 🟠${TEMP_HIGH}° 🔴>${TEMP_CRITICAL}°"
+    echo "🔔 Notifiche: $([ "$ENABLE_NOTIFICATIONS" = "true" ] && echo "✅ Abilitate" || echo "❌ Disabilitate")"
+    
+    case "$terminal" in
+        urxvt)
+            echo "🖥️ Comando urxvt (con trasparenza)..."
+            urxvt -bg "rgba:0000/0000/0000/$TRANSPARENCY_LEVEL" -fg green \
+                  -fn 'xft:Monospace:size=10' \
+                  -geometry "${geometry}+${POSITION_X}+${POSITION_Y}" \
+                  -title "Termometro CPU" \
+                  +sb -bl -bc \
+                  -e "$monitor_script" &
+            ;;
+        xfce4-terminal)
+            echo "🖥️ Comando xfce4-terminal..."
+            xfce4-terminal --geometry="${geometry}" \
+                          --title="Termometro CPU" \
+                          --hide-menubar --hide-toolbar \
+                          --hide-scrollbar \
+                          --command="bash -c '$monitor_script'" &
+            ;;
+        xterm)
+            echo "🖥️ Comando xterm..."
+            xterm -bg black -fg green -fa 'Monospace' -fs 10 \
+                  -geometry "${geometry}+${POSITION_X}+${POSITION_Y}" \
+                  -title "Termometro CPU" \
+                  +sb -bc -rw -j -s -sk \
+                  -e bash -c "$monitor_script" &
+            ;;
+        *)
+            echo "🖥️ Comando $terminal generico..."
+            "$terminal" -e bash -c "$monitor_script" &
+            ;;
+    esac
+    
+    local pid=$!
+    debug_print "PID processo terminal: $pid"
+    
+    sleep 1
+    if kill -0 $pid 2>/dev/null; then
+        echo "✅ Termometro CPU avviato con successo!"
+        echo "🔍 PID: $pid"
+        echo "📝 Il terminale originale rimane utilizzabile"
+        echo "🔑 Per chiudere: Ctrl+C nella finestra del monitor"
+        
+        ( sleep 30 && rm -f "$monitor_script" 2>/dev/null ) &
+    else
+        echo "❌ Errore nell'avvio del terminal"
+        rm -f "$monitor_script"
+        return 1
+    fi
+}
+
+# Test rapido temperature
+quick_test() {
+    echo "🌡️ Test Termometro CPU"
+    echo "======================="
+    test_sensors
+    echo
+    echo "🎛️ Soglie personalizzate:"
+    echo "  🟢 Normale:   < ${TEMP_NORMAL}°C"
+    echo "  🟡 Elevata:   ${TEMP_WARNING}-${TEMP_HIGH}°C"  
+    echo "  🟠 Alta:      ${TEMP_HIGH}-${TEMP_CRITICAL}°C"
+    echo "  🔴 Critica:   > ${TEMP_CRITICAL}°C"
+    echo
+    echo "📊 Temperature attuali:"
+    get_temperatures
+    echo
+    echo "📐 Dimensioni finestra: $(calculate_window_size)"
+    echo "🔔 Notifiche: $([ "$ENABLE_NOTIFICATIONS" = "true" ] && echo "✅ Abilitate" || echo "❌ Disabilitate")"
+    echo
+    echo "✅ Tutto funziona! Prova ad avviare il monitor."
+}
+
+# Mostra configurazione
+show_config() {
+    echo "🎛️ Configurazione Termometro CPU"
+    echo "================================="
+    echo "📁 File: $HOME/.config/termometro-cpu/config"
+    echo
+    echo "🌡️ Soglie temperature:"
+    echo "  🟢 Normale:   < ${TEMP_NORMAL}°C"
+    echo "  🟡 Elevata:   ${TEMP_WARNING}-${TEMP_HIGH}°C"  
+    echo "  🟠 Alta:      ${TEMP_HIGH}-${TEMP_CRITICAL}°C"
+    echo "  🔴 Critica:   > ${TEMP_CRITICAL}°C"
+    echo
+    echo "🔔 Notifiche:"
+    echo "  Status:      $([ "$ENABLE_NOTIFICATIONS" = "true" ] && echo "✅ Abilitate" || echo "❌ Disabilitate")"
+    echo "  Warning:     $([ "$NOTIFY_WARNING" = "true" ] && echo "✅ Abilitate" || echo "❌ Disabilitate")"
+    echo "  Critical:    $([ "$NOTIFY_CRITICAL" = "true" ] && echo "✅ Abilitate" || echo "❌ Disabilitate")"
+    echo "  Cooldown:    ${NOTIFY_COOLDOWN}s"
+    echo
+    echo "⚙️ Sistema:"
+    echo "  Aggiornamento: ${UPDATE_INTERVAL}s"
+    echo
+    echo "💡 Per modificare: $0 --edit-config"
+}
+
+# Mostra informazioni
+show_info() {
+    echo "🌡️ Termometro CPU - Informazioni"
+    echo "================================="
+    echo
+    echo "🎨 Simboli temperatura (personalizzabili):"
+    echo -e "   ${COLOR_NORMAL}🟢${COLOR_RESET} < ${TEMP_NORMAL}°C   (normale)"
+    echo -e "   ${COLOR_WARNING}🟡${COLOR_RESET} ${TEMP_WARNING}-${TEMP_HIGH}°C  (elevata)"
+    echo -e "   ${COLOR_HIGH}🟠${COLOR_RESET} ${TEMP_HIGH}-${TEMP_CRITICAL}°C  (alta)"
+    echo -e "   ${COLOR_CRITICAL}🔴${COLOR_RESET} > ${TEMP_CRITICAL}°C   (critica)"
+    echo
+    echo "📊 Monitoraggio CPU:"
+    echo "• Mostra i 3 processi con maggior consumo CPU (> 1%)"
+    echo "• Utile per identificare cause di temperature elevate"
+    echo "• Aggiornamento ogni ${UPDATE_INTERVAL} secondi"
+    echo
+    echo "🔔 Sistema notifiche:"
+    echo "• Avvisi automatici desktop per temperature elevate"
+    echo "• Cooldown intelligente per evitare spam"
+    echo "• Configurabile per warning e critical"
+    echo
+    echo "🎛️ Personalizzazione:"
+    echo "• Soglie temperature completamente configurabili"
+    echo "• File configurazione: ~/.config/termometro-cpu/config"
+    echo "• Modifica con: $0 --edit-config"
+    echo
+    echo "🔧 Se le temperature sono alte:"
+    echo "• Controlla i processi nella sezione 'Top CPU'"
+    echo "• Chiudi applicazioni pesanti non necessarie"
+    echo "• Verifica ventole e pulizia sistema"
+}
+
+# Main
+main() {
+    echo "🌡️ Termometro CPU - Versione 1.5"
+    echo "=================================="
+    
+    # Carica configurazione personalizzata
+    load_config
+    
+    if [ "$EUID" -eq 0 ]; then
+        echo "❌ Non eseguire questo script come root!"
+        exit 1
+    fi
+    
+    if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+        echo "Il monitor è già in esecuzione (PID: $(cat "$PID_FILE"))"
+        read -p "Vuoi terminarlo? (y/N): " kill_existing
+        if [[ $kill_existing =~ ^[Yy]$ ]]; then
+            kill "$(cat "$PID_FILE")" 2>/dev/null
+            rm -f "$PID_FILE"
+        else
+            exit 0
+        fi
+    fi
+    
+    case "${1:-}" in
+        "--test"|"-t")
+            quick_test
+            ;;
+        "--info"|"-i")
+            show_info
+            ;;
+        "--config"|"-c")
+            show_config
+            ;;
+        "--edit-config")
+            local config_file="$HOME/.config/termometro-cpu/config"
+            if command -v nano >/dev/null 2>&1; then
+                nano "$config_file"
+            elif command -v vim >/dev/null 2>&1; then
+                vim "$config_file"
+            elif command -v gedit >/dev/null 2>&1; then
+                gedit "$config_file" &
+            else
+                echo "📝 Modifica manualmente: $config_file"
+                return
+            fi
+            echo "✅ Configurazione modificata! Riavvia il monitor per applicare."
+            ;;
+        "--test-notify")
+            echo "📢 Test notifica..."
+            send_notification "+95.0°C" "Test Core"
+            echo "✅ Notifica di test inviata (se abilitate)!"
+            ;;
+        "--help"|"-h")
+            echo "🌡️ Termometro CPU"
+            echo "=================="
+            echo "Uso:"
+            echo "  $0               # Apre monitor con soglie personalizzabili"
+            echo "  $0 --test        # Test sistema e configurazione"
+            echo "  $0 --info        # Informazioni dettagliate"
+            echo "  $0 --config      # Mostra configurazione attuale"
+            echo "  $0 --edit-config # Modifica soglie e notifiche"
+            echo "  $0 --test-notify # Test notifiche desktop"
+            echo "  $0 --help        # Mostra questo aiuto"
+            echo
+            echo "🎨 Simboli temperatura (personalizzabili):"
+            echo "  🟢 Verde (<${TEMP_NORMAL}°C) 🟡 Giallo (${TEMP_WARNING}-${TEMP_HIGH}°C) 🟠 Arancione (${TEMP_HIGH}-${TEMP_CRITICAL}°C) 🔴 Rosso (>${TEMP_CRITICAL}°C)"
+            echo
+            echo "🔔 Notifiche: $([ "$ENABLE_NOTIFICATIONS" = "true" ] && echo "✅ Abilitate" || echo "❌ Disabilitate")"
+            echo
+            echo "💡 Novità v1.5:"
+            echo "  • Soglie temperature completamente personalizzabili"
+            echo "  • Sistema notifiche desktop intelligenti"
+            echo "  • Configurazione persistente"
+            ;;
+        *)
+            launch_terminal
+            ;;
+    esac
+}
+
+# Avvia il programma
+main "$@"

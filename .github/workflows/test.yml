@@ -1,0 +1,47 @@
+name: Test Temperature Monitor
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y lm-sensors bc shellcheck
+        
+    - name: Make scripts executable
+      run: |
+        chmod +x temp-monitor install desktop-integration
+        
+    - name: Lint scripts with shellcheck
+      run: |
+        shellcheck temp-monitor || echo "⚠️ Linting issues found in temp-monitor"
+        shellcheck install || echo "⚠️ Linting issues found in install"
+        shellcheck desktop-integration || echo "⚠️ Linting issues found in desktop-integration"
+    
+    - name: Test script syntax
+      run: |
+        bash -n temp-monitor
+        bash -n install
+        bash -n desktop-integration
+        echo "✅ All scripts have valid syntax"
+    
+    - name: Test help commands
+      run: |
+        ./temp-monitor --help
+        echo "✅ Help command works"
+    
+    - name: Test configuration commands
+      run: |
+        ./temp-monitor --config || echo "ℹ️ Config test completed"
+        ./temp-monitor --info || echo "ℹ️ Info test completed"

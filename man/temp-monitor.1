@@ -1,0 +1,187 @@
+.TH TEMP-MONITOR 1 "2025-01-28" "Temperature Monitor 1.5" "User Commands"
+.SH NAME
+temp-monitor \- real-time CPU temperature monitoring with transparent interface
+.SH SYNOPSIS
+.B temp-monitor
+[\fIOPTION\fR]
+.SH DESCRIPTION
+.B temp-monitor
+is a lightweight, real-time CPU temperature monitor for Linux systems that displays temperature information in a compact, transparent terminal window. It shows individual CPU core temperatures, system sensors, and the top CPU-consuming processes to help identify heat sources.
+
+The monitor uses colored indicators to represent temperature states: green for normal, yellow for elevated, orange for high, and red for critical temperatures. All thresholds are user-configurable.
+
+.SH OPTIONS
+.TP
+.B \-h, \-\-help
+Show help message and usage information
+.TP
+.B \-t, \-\-test
+Display current temperatures once and exit (useful for scripts)
+.TP
+.B \-i, \-\-info
+Show detailed information about the monitor and temperature symbols
+.TP
+.B \-c, \-\-config
+Display current configuration including temperature thresholds and notification settings
+.TP
+.B \-\-edit\-config
+Open the configuration file in the default editor to modify temperature thresholds and other settings
+.TP
+.B \-\-test\-notify
+Send a test desktop notification to verify notification system is working
+.TP
+.B \-\-debug
+Show debug information including sensor detection and terminal availability
+.TP
+.B \-\-fix\-sensors
+Attempt to fix sensor issues (useful after system suspend/resume)
+
+.SH FILES
+.TP
+.B ~/.config/termometro-cpu/config
+Main configuration file containing temperature thresholds, notification settings, and update interval
+.TP
+.B ~/.local/bin/temp-monitor
+Main executable (after installation)
+.TP
+.B ~/.local/share/applications/temperature-monitor.desktop
+Desktop integration file for application menus
+
+.SH CONFIGURATION
+The configuration file \fB~/.config/termometro-cpu/config\fR supports the following settings:
+
+.TP
+.B TEMP_NORMAL=60
+Temperature threshold (°C) below which temperatures are considered normal (green indicator)
+.TP
+.B TEMP_WARNING=75
+Temperature threshold (°C) for elevated temperatures (yellow indicator)
+.TP
+.B TEMP_HIGH=85
+Temperature threshold (°C) for high temperatures (orange indicator)
+.TP
+.B TEMP_CRITICAL=90
+Temperature threshold (°C) above which temperatures are critical (red indicator)
+.TP
+.B ENABLE_NOTIFICATIONS=true
+Enable/disable desktop notifications (true/false)
+.TP
+.B NOTIFY_WARNING=true
+Send notifications for elevated temperatures (true/false)
+.TP
+.B NOTIFY_CRITICAL=true
+Send notifications for critical temperatures (true/false)
+.TP
+.B NOTIFY_COOLDOWN=300
+Minimum seconds between notifications to prevent spam
+.TP
+.B UPDATE_INTERVAL=2
+Update interval in seconds for the real-time display
+
+.SH TEMPERATURE INDICATORS
+.TP
+.B 🟢 Green
+Normal operating temperature (below TEMP_NORMAL threshold)
+.TP
+.B 🟡 Yellow
+Elevated temperature (between TEMP_WARNING and TEMP_HIGH)
+.TP
+.B 🟠 Orange
+High temperature (between TEMP_HIGH and TEMP_CRITICAL)
+.TP
+.B 🔴 Red
+Critical temperature (above TEMP_CRITICAL threshold) - immediate attention required
+
+.SH SUPPORTED TERMINALS
+.B temp-monitor
+automatically detects and uses the best available terminal emulator:
+
+.TP
+.B Preferred (with transparency support):
+urxvt, alacritty
+.TP
+.B Good compatibility:
+xfce4-terminal, gnome-terminal, konsole, kitty
+.TP
+.B Basic fallback:
+xterm, lxterminal
+
+.SH DESKTOP INTEGRATION
+After installation, \fBtemp-monitor\fR integrates with all major desktop environments:
+
+.TP
+.B GNOME
+Activities → Show Applications → Temperature Monitor
+.TP
+.B KDE/Plasma
+Application Menu → System → Temperature Monitor
+.TP
+.B XFCE
+Applications Menu → System → Temperature Monitor
+.TP
+.B MATE
+Applications → System Tools → Temperature Monitor
+.TP
+.B Others
+Available in System or Administration category
+
+.SH EXAMPLES
+.TP
+.B temp-monitor
+Start the real-time temperature monitor in a transparent window
+.TP
+.B temp-monitor --test
+Show current temperatures and exit (useful for scripts or quick checks)
+.TP
+.B temp-monitor --edit-config
+Open configuration file to modify temperature thresholds
+.TP
+.B temp-monitor --fix-sensors
+Reset sensor modules (helpful after system suspend/resume)
+
+.SH TROUBLESHOOTING
+.TP
+.B Sensors not detected:
+Run \fBsudo sensors-detect --auto\fR to detect and configure hardware sensors
+.TP
+.B After suspend/resume:
+Use \fBtemp-monitor --fix-sensors\fR or manually: \fBsudo modprobe -r coretemp && sudo modprobe coretemp\fR
+.TP
+.B Permission errors:
+Ensure the script is executable: \fBchmod +x ~/.local/bin/temp-monitor\fR
+.TP
+.B No temperatures shown:
+Install lm-sensors: \fBsudo apt install lm-sensors\fR (Debian/Ubuntu) or equivalent for your distribution
+
+.SH DEPENDENCIES
+.TP
+.B Required:
+lm-sensors, bash, bc
+.TP
+.B Optional:
+notify-send (for desktop notifications), compatible terminal emulator
+
+.SH SUPPORTED SYSTEMS
+.TP
+.B Distributions:
+Debian, Ubuntu, Fedora, CentOS, RHEL, Arch Linux, Manjaro, openSUSE, and most other Linux distributions
+.TP
+.B Architectures:
+x86_64, ARM64
+.TP
+.B Display servers:
+X11, Wayland
+
+.SH AUTHOR
+Written for the Linux community with focus on simplicity and transparency.
+
+.SH REPORTING BUGS
+Report bugs and issues at: <https://github.com/yourusername/temperature-monitor/issues>
+
+.SH COPYRIGHT
+This software is released under the MIT License. See the LICENSE file for details.
+
+.SH SEE ALSO
+.BR sensors (1),
+.BR lm-sensors (8),
+.BR notify-send (1)
