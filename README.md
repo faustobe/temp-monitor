@@ -47,7 +47,7 @@ curl -fsSL https://raw.githubusercontent.com/faustobe/temp-monitor/main/install 
 ### Manual Installation
 ```bash
 git clone https://github.com/faustobe/temp-monitor.git
-cd temperature-monitor
+cd temp-monitor
 chmod +x install
 ./install
 ```
@@ -183,8 +183,8 @@ After installation:
 ```
 ~/.local/bin/temp-monitor                    # Main executable
 ~/.config/termometro-cpu/config              # Configuration file
-~/.local/share/applications/temperature-monitor.desktop  # Desktop integration
-~/.local/share/icons/hicolor/*/apps/temperature-monitor.*  # Icons
+~/.local/share/applications/temp-monitor.desktop  # Desktop integration
+~/.local/share/icons/hicolor/*/apps/temp-monitor.*  # Icons
 ```
 
 ## 🧪 Advanced Usage
@@ -229,7 +229,7 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guid
 ### Development Setup
 ```bash
 git clone https://github.com/faustobe/temp-monitor.git
-cd temperature-monitor
+cd temp-monitor
 ./temp-monitor --test  # Test your changes
 ```
 

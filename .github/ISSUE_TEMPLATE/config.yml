@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: 💬 General Discussion
-    url: https://github.com/faustobe/temperature-monitor/discussions
+    url: https://github.com/faustobe/temp-monitor/discussions
     about: Ask questions and discuss ideas with the community
   - name: 📖 Documentation
-    url: https://github.com/faustobe/temperature-monitor#readme
+    url: https://github.com/faustobe/temp-monitor#readme
     about: Check the README for usage instructions
