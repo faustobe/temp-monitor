@@ -41,12 +41,12 @@ Ctrl+C per uscire
 
 ### One-line Installation
 ```bash
-curl -fsSL https://raw.githubusercontent.com/yourusername/temperature-monitor/main/install | bash
+curl -fsSL https://raw.githubusercontent.com/faustobe/temp-monitor/main/install | bash
 ```
 
 ### Manual Installation
 ```bash
-git clone https://github.com/yourusername/temperature-monitor.git
+git clone https://github.com/faustobe/temp-monitor.git
 cd temperature-monitor
 chmod +x install
 ./install
@@ -228,7 +228,7 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guid
 
 ### Development Setup
 ```bash
-git clone https://github.com/yourusername/temperature-monitor.git
+git clone https://github.com/faustobe/temp-monitor.git
 cd temperature-monitor
 ./temp-monitor --test  # Test your changes
 ```
@@ -252,9 +252,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📞 Support
 
-- 🐛 **Issues**: [GitHub Issues](https://github.com/yourusername/temperature-monitor/issues)
-- 💬 **Discussions**: [GitHub Discussions](https://github.com/yourusername/temperature-monitor/discussions)
-- 📧 **Email**: your.email@example.com
+- 🐛 **Issues**: [GitHub Issues](https://github.com/faustobe/temp-monitor/issues)
+- 💬 **Discussions**: [GitHub Discussions](https://github.com/faustobe/temp-monitor/discussions)
+- 📧 **Email**: faustobe@google.com
 
 ---
 
