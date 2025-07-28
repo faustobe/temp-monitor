@@ -214,10 +214,10 @@ install_script() {
     mkdir -p "$DESKTOP_DIR"
     
     # Copia script principale
-    if [ -f "temp_monitor.sh" ]; then
-        cp temp_monitor.sh "$INSTALL_DIR/$SCRIPT_NAME"
+    if [ -f "temp-monitor.sh" ]; then
+        cp temp-monitor.sh "$INSTALL_DIR/$SCRIPT_NAME"
     else
-        print_error "File temp_monitor.sh non trovato nella directory corrente"
+        print_error "File temp-monitor.sh non trovato nella directory corrente"
         print_status "Scarica lo script da GitHub o crea il file manualmente"
         exit 1
     fi
